@@ -266,8 +266,10 @@ def extract_text():
         for i in range(len(data['level'])):
             text = data['text'][i]
             if text and str(text).strip():
+                original_text = str(text).strip()
                 block = {
-                    'text': str(text).strip(),
+                    'text': original_text,
+                    'original_text': original_text,  # Store original for comparison
                     'x': int(data['left'][i]),
                     'y': int(data['top'][i]),
                     'width': int(data['width'][i]),
@@ -281,7 +283,8 @@ def extract_text():
                     'underline': False,
                     'textColor': '#000000',
                     'backgroundColor': '#FFFFFF',
-                    'backgroundTransparent': True
+                    'backgroundTransparent': True,
+                    'isEdited': False  # Track if this block was edited
                 }
                 text_blocks.append(block)
         
@@ -334,16 +337,44 @@ def update_image():
         overlay = Image.new('RGBA', image.size, (255, 255, 255, 0))
         draw = ImageDraw.Draw(overlay)
         
-        print(f"✏️  Processing {len(text_blocks)} text blocks...")
+        # Count edited blocks
+        edited_count = 0
+        
+        print(f"📝 Checking {len(text_blocks)} text blocks for changes...")
         
         # Process each text block
         for idx, block in enumerate(text_blocks):
             try:
+                original_text = block.get('original_text', '')
+                current_text = str(block['text'])
+                
+                # Check if text was actually changed
+                text_changed = (current_text != original_text)
+                
+                # Check if any styling was applied
+                styling_changed = (
+                    block.get('bold', False) or
+                    block.get('italic', False) or
+                    block.get('underline', False) or
+                    block.get('textColor', '#000000') != '#000000' or
+                    block.get('backgroundColor', '#FFFFFF') != '#FFFFFF' or
+                    not block.get('backgroundTransparent', True) or
+                    block.get('fontSize', 20) != 20 or
+                    block.get('fontFamily', 'Arial') != 'Arial'
+                )
+                
+                # Only modify if text or styling changed
+                if not (text_changed or styling_changed):
+                    print(f"   ⊝ Block {idx+1}: Unchanged, skipping")
+                    continue
+                
+                edited_count += 1
+                
                 x = int(block['x'])
                 y = int(block['y'])
                 w = int(block['width'])
                 h = int(block['height'])
-                text = str(block['text'])
+                text = current_text
                 
                 # Get styling
                 font_size = int(block.get('fontSize', 20))
@@ -387,12 +418,30 @@ def update_image():
                             width=2
                         )
                     except:
-                        pass  # textbbox might not be available in older Pillow
+                        pass
                 
-                print(f"   ✓ Block {idx+1}: '{text[:30]}...'")
+                if text_changed:
+                    print(f"   ✓ Block {idx+1}: Text changed '{original_text}' → '{text[:30]}...'")
+                else:
+                    print(f"   ✓ Block {idx+1}: Styling changed")
                 
             except Exception as block_err:
                 print(f"   ✗ Block {idx+1} error: {str(block_err)}")
+        
+        if edited_count == 0:
+            print("⚠️  No changes detected, returning original image")
+            # Return original image if nothing was edited
+            buffered = BytesIO()
+            Image.open(image_path).save(buffered, format="PNG")
+            img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+            
+            return jsonify({
+                'success': True,
+                'edited_image': f"data:image/png;base64,{img_base64}",
+                'filename': os.path.basename(image_path),
+                'changes_count': 0,
+                'message': 'No changes were made'
+            })
         
         # Composite and convert
         image = Image.alpha_composite(image, overlay)
@@ -404,17 +453,19 @@ def update_image():
         image.save(output_path, quality=95)
         
         print(f"💾 Saved: {output_filename}")
+        print(f"✅ SUCCESS - Modified {edited_count} block(s)")
         
         # Convert to base64
         buffered = BytesIO()
         image.save(buffered, format="PNG")
         img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
         
-        print("✅ SUCCESS")
         return jsonify({
             'success': True,
             'edited_image': f"data:image/png;base64,{img_base64}",
-            'filename': output_filename
+            'filename': output_filename,
+            'changes_count': edited_count,
+            'message': f'Successfully modified {edited_count} text block(s)'
         })
         
     except Exception as e:
@@ -424,7 +475,6 @@ def update_image():
             'error': str(e),
             'traceback': traceback.format_exc()
         }), 500
-
 @app.route('/download/<path:filename>', methods=['GET'])
 def download_file(filename):
     try:
@@ -474,3 +524,4 @@ if __name__ == '__main__':
         host='0.0.0.0' if is_production else '127.0.0.1',
         port=port
     )
+
