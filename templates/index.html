@@ -1602,6 +1602,7 @@
                 return {
                     ...block,
                     text: input ? input.value : block.text,
+                    original_text: block.original_text || block.text,  // Preserve original
                     fontFamily: fontFamily ? fontFamily.value : 'Arial',
                     fontSize: fontSize ? parseInt(fontSize.value) : 20,
                     textColor: textColor ? textColor.value : '#000000',
@@ -1652,7 +1653,12 @@
                         resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
                     }, 100);
                     
-                    showToast('Image updated successfully!', 'success');
+                    // Show different message based on changes
+                    if (data.changes_count === 0) {
+                        showToast('No changes detected. Edit some text first!', 'warning');
+                    } else {
+                        showToast(`Successfully modified ${data.changes_count} text block(s)!`, 'success');
+                    }
                 }
             } catch (error) {
                 console.error('Update error:', error);
@@ -1754,4 +1760,5 @@
         console.log('%c✅ Live Style Preview Loaded!', 'color: green; font-weight: bold;');
     </script>
 </body>
+
 </html>
