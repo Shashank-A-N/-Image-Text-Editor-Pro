@@ -341,6 +341,47 @@ def download_file(filename):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/debug', methods=['GET'])
+def debug_info():
+    """Debug endpoint to check system configuration"""
+    import subprocess
+    import sys
+    
+    debug_data = {
+        'python_version': sys.version,
+        'tesseract_cmd': pytesseract.pytesseract.tesseract_cmd,
+        'tesseract_exists': os.path.exists(pytesseract.pytesseract.tesseract_cmd) if pytesseract.pytesseract.tesseract_cmd else False,
+        'environment': dict(os.environ),
+        'cwd': os.getcwd(),
+    }
+    
+    # Try to find tesseract
+    try:
+        result = subprocess.run(['which', 'tesseract'], capture_output=True, text=True)
+        debug_data['which_tesseract'] = result.stdout.strip()
+    except:
+        debug_data['which_tesseract'] = 'Command failed'
+    
+    # Try to run tesseract
+    try:
+        result = subprocess.run(['tesseract', '--version'], capture_output=True, text=True)
+        debug_data['tesseract_version'] = result.stdout
+    except Exception as e:
+        debug_data['tesseract_version'] = str(e)
+    
+    # Check common paths
+    common_paths = [
+        '/usr/bin/tesseract',
+        '/usr/local/bin/tesseract',
+        '/app/.apt/usr/bin/tesseract'
+    ]
+    
+    debug_data['path_checks'] = {
+        path: os.path.exists(path) for path in common_paths
+    }
+    
+    return jsonify(debug_data)
+
 if __name__ == '__main__':
     print("\n" + "="*60)
     print("🚀 Image Text Editor Server")
@@ -358,3 +399,4 @@ if __name__ == '__main__':
     
 
     app.run(debug=True, port=5000, host='127.0.0.1')
+
