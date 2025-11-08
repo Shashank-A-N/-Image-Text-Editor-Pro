@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
 import os
+import shutil
 import base64
 from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter
 import pytesseract
@@ -24,7 +25,44 @@ TESSERACT_PATHS = [
     r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
 ]
 
-tesseract_configured = False
+# Configure Tesseract - Better detection
+def configure_tesseract():
+    """Configure Tesseract based on environment"""
+    
+    # Try common Linux paths first (for Render/Heroku/etc)
+    linux_paths = [
+        '/usr/bin/tesseract',
+        '/usr/local/bin/tesseract',
+        '/app/.apt/usr/bin/tesseract',
+        shutil.which('tesseract')  # Auto-detect from PATH
+    ]
+    
+    # Windows paths (for local development)
+    windows_paths = [
+        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+    ]
+    
+    # Try Linux paths first
+    for path in linux_paths:
+        if path and os.path.exists(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            print(f"✅ Tesseract found at: {path}")
+            return True
+    
+    # Try Windows paths
+    for path in windows_paths:
+        if os.path.exists(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            print(f"✅ Tesseract found at: {path}")
+            return True
+    
+    print("❌ Tesseract not found in any expected location")
+    print(f"Searched paths: {linux_paths + windows_paths}")
+    return False
+
+# Call configuration
+tesseract_configured = configure_tesseract()
 for path in TESSERACT_PATHS:
     if os.path.exists(path):
         pytesseract.pytesseract.tesseract_cmd = path
@@ -318,4 +356,5 @@ if __name__ == '__main__':
     print(f"🌐 Server: http://localhost:5000")
     print("="*60 + "\n")
     
+
     app.run(debug=True, port=5000, host='127.0.0.1')
