@@ -3,17 +3,13 @@ from flask_cors import CORS
 import os
 import shutil
 import base64
-from PIL import Image, ImageDraw, ImageFont, ImageEnhance, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageEnhance
 import pytesseract
 from io import BytesIO
 from werkzeug.utils import secure_filename
 import traceback
-
-# At the top, after imports
-tesseract_path = os.environ.get('TESSERACT_PATH')
-if tesseract_path:
-    pytesseract.pytesseract.tesseract_cmd = tesseract_path
-    print(f"Using Tesseract from env: {tesseract_path}")
+import subprocess
+import sys
 
 app = Flask(__name__)
 CORS(app)
@@ -25,107 +21,136 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024
 
-# Configure Tesseract
-TESSERACT_PATHS = [
-    r'C:\Program Files\Tesseract-OCR\tesseract.exe',
-    r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
-]
-
-# Configure Tesseract - Better detection
-def configure_tesseract():
-    """Configure Tesseract based on environment"""
-    
-    # Try common Linux paths first (for Render/Heroku/etc)
-    linux_paths = [
-        '/usr/bin/tesseract',
-        '/usr/local/bin/tesseract',
-        '/app/.apt/usr/bin/tesseract',
-        shutil.which('tesseract')  # Auto-detect from PATH
-    ]
-    
-    # Windows paths (for local development)
-    windows_paths = [
-        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
-        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
-    ]
-    
-    # Try Linux paths first
-    for path in linux_paths:
-        if path and os.path.exists(path):
-            pytesseract.pytesseract.tesseract_cmd = path
-            print(f"✅ Tesseract found at: {path}")
-            return True
-    
-    # Try Windows paths
-    for path in windows_paths:
-        if os.path.exists(path):
-            pytesseract.pytesseract.tesseract_cmd = path
-            print(f"✅ Tesseract found at: {path}")
-            return True
-    
-    print("❌ Tesseract not found in any expected location")
-    print(f"Searched paths: {linux_paths + windows_paths}")
-    return False
-
-# Call configuration
-tesseract_configured = configure_tesseract()
-for path in TESSERACT_PATHS:
-    if os.path.exists(path):
-        pytesseract.pytesseract.tesseract_cmd = path
-        tesseract_configured = True
-        print(f"✅ Tesseract found at: {path}")
-        break
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
+# ==================== TESSERACT CONFIGURATION ====================
 
 def setup_tesseract():
-    # Method 1: Check environment variable
-    if os.environ.get('TESSERACT_PATH'):
-        path = os.environ.get('TESSERACT_PATH')
-        if os.path.exists(path):
-            pytesseract.pytesseract.tesseract_cmd = path
-            print(f"✅ Using Tesseract from env: {path}")
-            return True
+    """
+    Configure Tesseract OCR for different environments
+    Priority: ENV variable > Auto-detect > Common paths
+    """
     
-    # Method 2: Auto-detect using which/shutil
+    # Method 1: Environment variable (highest priority)
+    env_path = os.environ.get('TESSERACT_PATH')
+    if env_path and os.path.exists(env_path):
+        pytesseract.pytesseract.tesseract_cmd = env_path
+        print(f"✅ Tesseract from ENV: {env_path}")
+        return True
+    
+    # Method 2: Auto-detect using which/shutil (works in Docker/Linux)
     detected = shutil.which('tesseract')
     if detected:
         pytesseract.pytesseract.tesseract_cmd = detected
-        print(f"✅ Tesseract auto-detected at: {detected}")
+        print(f"✅ Tesseract auto-detected: {detected}")
         return True
     
-    # Method 3: Try common Linux paths
+    # Method 3: Common Linux paths (for Docker/production)
     linux_paths = [
         '/usr/bin/tesseract',
         '/usr/local/bin/tesseract',
         '/app/.apt/usr/bin/tesseract',
     ]
+    
     for path in linux_paths:
         if os.path.exists(path):
             pytesseract.pytesseract.tesseract_cmd = path
-            print(f"✅ Tesseract found at: {path}")
+            print(f"✅ Tesseract found: {path}")
             return True
     
-    # Method 4: Windows (local development)
+    # Method 4: Windows paths (for local development)
     windows_paths = [
         r'C:\Program Files\Tesseract-OCR\tesseract.exe',
         r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
     ]
+    
     for path in windows_paths:
         if os.path.exists(path):
             pytesseract.pytesseract.tesseract_cmd = path
-            print(f"✅ Tesseract found at: {path}")
+            print(f"✅ Tesseract found: {path}")
             return True
     
-    print("❌ Tesseract not found!")
+    print("❌ Tesseract not found in any expected location!")
     return False
 
 # Initialize Tesseract
 tesseract_available = setup_tesseract()
 
+# ==================== HELPER FUNCTIONS ====================
+
+def hex_to_rgb(hex_color):
+    """Convert hex color to RGB tuple"""
+    hex_color = hex_color.lstrip('#')
+    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+
+def get_font(font_family, font_size, bold=False, italic=False):
+    """
+    Load font with fallbacks for both Linux (Docker) and Windows
+    """
+    
+    # Linux font paths (for Docker/production)
+    linux_fonts = {
+        'Arial': [
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf' if bold else None,
+            '/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf' if italic else None,
+        ],
+        'Times New Roman': [
+            '/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf' if bold else None,
+        ],
+        'Courier New': [
+            '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
+            '/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf' if bold else None,
+        ],
+    }
+    
+    # Windows font paths (for local development)
+    windows_fonts = {
+        'Arial': [
+            'C:/Windows/Fonts/arial.ttf',
+            'C:/Windows/Fonts/arialbd.ttf' if bold else None,
+            'C:/Windows/Fonts/ariali.ttf' if italic else None,
+        ],
+        'Times New Roman': [
+            'C:/Windows/Fonts/times.ttf',
+            'C:/Windows/Fonts/timesbd.ttf' if bold else None,
+            'C:/Windows/Fonts/timesi.ttf' if italic else None,
+        ],
+        'Courier New': [
+            'C:/Windows/Fonts/cour.ttf',
+            'C:/Windows/Fonts/courbd.ttf' if bold else None,
+        ],
+        'Comic Sans MS': ['C:/Windows/Fonts/comic.ttf'],
+        'Verdana': ['C:/Windows/Fonts/verdana.ttf'],
+        'Georgia': ['C:/Windows/Fonts/georgia.ttf'],
+    }
+    
+    # Try Linux fonts first (Docker environment)
+    font_paths = linux_fonts.get(font_family, linux_fonts.get('Arial', []))
+    for path in font_paths:
+        if path and os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, font_size)
+            except:
+                continue
+    
+    # Try Windows fonts (local development)
+    font_paths = windows_fonts.get(font_family, windows_fonts.get('Arial', []))
+    for path in font_paths:
+        if path and os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, font_size)
+            except:
+                continue
+    
+    # Final fallback to default font
+    print(f"⚠️  Could not load {font_family}, using default font")
+    return ImageFont.load_default()
+
+# ==================== ROUTES ====================
+
+@app.route('/')
+def index():
+    return render_template('index.html')
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -133,28 +158,77 @@ def health_check():
     try:
         version = pytesseract.get_tesseract_version()
         tesseract_ok = True
-    except:
+    except Exception as e:
         tesseract_ok = False
-        version = "Not found"
+        version = f"Error: {str(e)}"
     
     return jsonify({
         'status': 'ok',
         'tesseract': tesseract_ok,
-        'version': str(version)
+        'version': str(version),
+        'tesseract_path': pytesseract.pytesseract.tesseract_cmd
     })
+
+@app.route('/debug', methods=['GET'])
+def debug_info():
+    """Debug endpoint to check system configuration"""
+    debug_data = {
+        'python_version': sys.version,
+        'tesseract_cmd': pytesseract.pytesseract.tesseract_cmd,
+        'tesseract_configured': tesseract_available,
+        'cwd': os.getcwd(),
+        'upload_folder': os.path.abspath(UPLOAD_FOLDER),
+    }
+    
+    # Try to find tesseract
+    try:
+        result = subprocess.run(['which', 'tesseract'], capture_output=True, text=True, timeout=5)
+        debug_data['which_tesseract'] = result.stdout.strip()
+    except:
+        debug_data['which_tesseract'] = 'Command not available'
+    
+    # Try to run tesseract version
+    try:
+        version = pytesseract.get_tesseract_version()
+        debug_data['tesseract_version'] = str(version)
+    except Exception as e:
+        debug_data['tesseract_version'] = f"Error: {str(e)}"
+    
+    # Check common paths
+    common_paths = [
+        '/usr/bin/tesseract',
+        '/usr/local/bin/tesseract',
+        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+    ]
+    
+    debug_data['path_checks'] = {
+        path: os.path.exists(path) for path in common_paths
+    }
+    
+    # Check environment variables
+    debug_data['env_vars'] = {
+        'PORT': os.environ.get('PORT'),
+        'RENDER': os.environ.get('RENDER'),
+        'TESSERACT_PATH': os.environ.get('TESSERACT_PATH'),
+    }
+    
+    return jsonify(debug_data)
 
 @app.route('/extract_text', methods=['POST'])
 def extract_text():
     print("\n" + "="*60)
-    print("📸 EXTRACT TEXT REQUEST RECEIVED")
+    print("📸 EXTRACT TEXT REQUEST")
     print("="*60)
     
     try:
-        if not tesseract_configured:
+        # Check Tesseract availability
+        if not tesseract_available:
             return jsonify({
-                'error': 'Tesseract OCR not found'
+                'error': 'Tesseract OCR is not configured properly',
+                'help': 'Please check /debug endpoint for details'
             }), 500
         
+        # Validate request
         if 'image' not in request.files:
             return jsonify({'error': 'No image uploaded'}), 400
         
@@ -162,18 +236,18 @@ def extract_text():
         if not file.filename:
             return jsonify({'error': 'No file selected'}), 400
         
+        # Save file
         filename = secure_filename(file.filename)
         image_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(image_path)
+        print(f"📁 File saved: {filename}")
         
-        print(f"📁 Processing: {filename}")
-        
-        # Open and process image
+        # Process image
         image = Image.open(image_path)
         if image.mode not in ('RGB', 'L'):
             image = image.convert('RGB')
         
-        # Enhance and convert to grayscale
+        # Enhance for better OCR
         enhancer = ImageEnhance.Contrast(image)
         image_enhanced = enhancer.enhance(1.5)
         image_gray = image_enhanced.convert('L')
@@ -228,17 +302,15 @@ def extract_text():
     except Exception as e:
         print(f"❌ Error: {str(e)}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-def hex_to_rgb(hex_color):
-    """Convert hex color to RGB tuple"""
-    hex_color = hex_color.lstrip('#')
-    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+        return jsonify({
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
 
 @app.route('/update_image', methods=['POST'])
 def update_image():
     print("\n" + "="*60)
-    print("✏️  UPDATE IMAGE REQUEST RECEIVED")
+    print("✏️  UPDATE IMAGE REQUEST")
     print("="*60)
     
     try:
@@ -246,23 +318,25 @@ def update_image():
         image_path = data.get('image_path')
         text_blocks = data.get('text_blocks')
         
+        # Validate input
         if not image_path or not text_blocks:
             return jsonify({'error': 'Missing required data'}), 400
         
         if not os.path.exists(image_path):
             return jsonify({'error': 'Original image not found'}), 404
         
-        # Open image with alpha channel support
+        # Open image
         image = Image.open(image_path)
         if image.mode != 'RGBA':
             image = image.convert('RGBA')
         
-        # Create a transparent overlay for drawing
+        # Create transparent overlay
         overlay = Image.new('RGBA', image.size, (255, 255, 255, 0))
         draw = ImageDraw.Draw(overlay)
         
         print(f"✏️  Processing {len(text_blocks)} text blocks...")
         
+        # Process each text block
         for idx, block in enumerate(text_blocks):
             try:
                 x = int(block['x'])
@@ -271,7 +345,7 @@ def update_image():
                 h = int(block['height'])
                 text = str(block['text'])
                 
-                # Get styling options
+                # Get styling
                 font_size = int(block.get('fontSize', 20))
                 font_family = block.get('fontFamily', 'Arial')
                 bold = block.get('bold', False)
@@ -282,78 +356,46 @@ def update_image():
                 bg_transparent = block.get('backgroundTransparent', True)
                 
                 # Load font
-                font = None
-                font_paths = {
-                    'Arial': [
-                        'C:/Windows/Fonts/arial.ttf',
-                        'C:/Windows/Fonts/arialbd.ttf' if bold else 'C:/Windows/Fonts/arial.ttf',
-                        'C:/Windows/Fonts/ariali.ttf' if italic else 'C:/Windows/Fonts/arial.ttf'
-                    ],
-                    'Times New Roman': [
-                        'C:/Windows/Fonts/times.ttf',
-                        'C:/Windows/Fonts/timesbd.ttf' if bold else 'C:/Windows/Fonts/times.ttf',
-                        'C:/Windows/Fonts/timesi.ttf' if italic else 'C:/Windows/Fonts/times.ttf'
-                    ],
-                    'Courier New': [
-                        'C:/Windows/Fonts/cour.ttf',
-                        'C:/Windows/Fonts/courbd.ttf' if bold else 'C:/Windows/Fonts/cour.ttf',
-                        'C:/Windows/Fonts/couri.ttf' if italic else 'C:/Windows/Fonts/cour.ttf'
-                    ],
-                    'Comic Sans MS': ['C:/Windows/Fonts/comic.ttf'],
-                    'Verdana': ['C:/Windows/Fonts/verdana.ttf'],
-                    'Georgia': ['C:/Windows/Fonts/georgia.ttf'],
-                }
+                font = get_font(font_family, font_size, bold, italic)
                 
-                # Try to load appropriate font
-                font_list = font_paths.get(font_family, font_paths['Arial'])
-                for font_path in font_list:
-                    try:
-                        font = ImageFont.truetype(font_path, font_size)
-                        break
-                    except:
-                        continue
-                
-                if not font:
-                    font = ImageFont.load_default()
-                
-                # Draw background if not transparent
+                # Draw background
                 if not bg_transparent:
                     bg_rgb = hex_to_rgb(bg_color)
                     draw.rectangle(
                         [x-2, y-2, x+w+2, y+h+2],
-                        fill=bg_rgb + (255,)  # Opaque background
+                        fill=bg_rgb + (255,)
                     )
                 else:
-                    # Draw semi-transparent white to cover original text
+                    # Semi-transparent white to cover original
                     draw.rectangle(
                         [x-2, y-2, x+w+2, y+h+2],
-                        fill=(255, 255, 255, 200)  # Semi-transparent white
+                        fill=(255, 255, 255, 200)
                     )
                 
                 # Draw text
                 text_rgb = hex_to_rgb(text_color)
                 draw.text((x, y), text, fill=text_rgb + (255,), font=font)
                 
-                # Draw underline if needed
+                # Draw underline
                 if underline:
-                    text_bbox = draw.textbbox((x, y), text, font=font)
-                    underline_y = text_bbox[3] + 1
-                    draw.line(
-                        [(x, underline_y), (text_bbox[2], underline_y)],
-                        fill=text_rgb + (255,),
-                        width=2
-                    )
+                    try:
+                        text_bbox = draw.textbbox((x, y), text, font=font)
+                        underline_y = text_bbox[3] + 1
+                        draw.line(
+                            [(x, underline_y), (text_bbox[2], underline_y)],
+                            fill=text_rgb + (255,),
+                            width=2
+                        )
+                    except:
+                        pass  # textbbox might not be available in older Pillow
                 
-                print(f"   ✓ Block {idx+1}: '{text[:30]}...' (Font: {font_family}, Size: {font_size})")
+                print(f"   ✓ Block {idx+1}: '{text[:30]}...'")
                 
             except Exception as block_err:
                 print(f"   ✗ Block {idx+1} error: {str(block_err)}")
-                traceback.print_exc()
         
-        # Composite the overlay onto the original image
+        # Composite and convert
         image = Image.alpha_composite(image, overlay)
-        
-        # Convert back to RGB for saving
         image = image.convert('RGB')
         
         # Save
@@ -369,8 +411,6 @@ def update_image():
         img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
         
         print("✅ SUCCESS")
-        print("="*60 + "\n")
-        
         return jsonify({
             'success': True,
             'edited_image': f"data:image/png;base64,{img_base64}",
@@ -380,7 +420,10 @@ def update_image():
     except Exception as e:
         print(f"❌ Error: {str(e)}")
         traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
+        return jsonify({
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
 
 @app.route('/download/<path:filename>', methods=['GET'])
 def download_file(filename):
@@ -390,68 +433,44 @@ def download_file(filename):
         
         if os.path.exists(file_path):
             return send_file(file_path, as_attachment=True, download_name=filename)
+        
         return jsonify({'error': 'File not found'}), 404
+        
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/debug', methods=['GET'])
-def debug_info():
-    """Debug endpoint to check system configuration"""
-    import subprocess
-    import sys
-    
-    debug_data = {
-        'python_version': sys.version,
-        'tesseract_cmd': pytesseract.pytesseract.tesseract_cmd,
-        'tesseract_exists': os.path.exists(pytesseract.pytesseract.tesseract_cmd) if pytesseract.pytesseract.tesseract_cmd else False,
-        'environment': dict(os.environ),
-        'cwd': os.getcwd(),
-    }
-    
-    # Try to find tesseract
-    try:
-        result = subprocess.run(['which', 'tesseract'], capture_output=True, text=True)
-        debug_data['which_tesseract'] = result.stdout.strip()
-    except:
-        debug_data['which_tesseract'] = 'Command failed'
-    
-    # Try to run tesseract
-    try:
-        result = subprocess.run(['tesseract', '--version'], capture_output=True, text=True)
-        debug_data['tesseract_version'] = result.stdout
-    except Exception as e:
-        debug_data['tesseract_version'] = str(e)
-    
-    # Check common paths
-    common_paths = [
-        '/usr/bin/tesseract',
-        '/usr/local/bin/tesseract',
-        '/app/.apt/usr/bin/tesseract'
-    ]
-    
-    debug_data['path_checks'] = {
-        path: os.path.exists(path) for path in common_paths
-    }
-    
-    return jsonify(debug_data)
+# ==================== MAIN ====================
 
 if __name__ == '__main__':
+    # Get port from environment (for Docker/Render)
+    port = int(os.environ.get('PORT', 5000))
+    
+    # Determine if running in production
+    is_production = os.environ.get('RENDER') or os.environ.get('PORT')
+    
     print("\n" + "="*60)
     print("🚀 Image Text Editor Server")
     print("="*60)
+    print(f"\nEnvironment: {'Production (Docker)' if is_production else 'Development'}")
     
+    # Display Tesseract status
     try:
         version = pytesseract.get_tesseract_version()
-        print(f"\n✅ Tesseract OCR v{version} is ready!")
-    except:
-        print("\n❌ Tesseract OCR not found!")
+        print(f"\n✅ Tesseract OCR v{version}")
+        print(f"📍 Location: {pytesseract.pytesseract.tesseract_cmd}")
+    except Exception as e:
+        print(f"\n❌ Tesseract Error: {str(e)}")
+        print("Check /debug endpoint for details")
     
     print(f"\n📁 Upload folder: {os.path.abspath(UPLOAD_FOLDER)}")
-    print(f"🌐 Server: http://localhost:5000")
+    print(f"🌐 Server: http://{'0.0.0.0' if is_production else '127.0.0.1'}:{port}")
+    print(f"🔍 Debug endpoint: /debug")
+    print(f"❤️  Health check: /health")
     print("="*60 + "\n")
     
-
-    app.run(debug=True, port=5000, host='127.0.0.1')
-
-
-
+    # Run app
+    app.run(
+        debug=not is_production,
+        host='0.0.0.0' if is_production else '127.0.0.1',
+        port=port
+    )
