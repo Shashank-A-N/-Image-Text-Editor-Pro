@@ -80,6 +80,53 @@ for path in TESSERACT_PATHS:
 def index():
     return render_template('index.html')
 
+
+def setup_tesseract():
+    # Method 1: Check environment variable
+    if os.environ.get('TESSERACT_PATH'):
+        path = os.environ.get('TESSERACT_PATH')
+        if os.path.exists(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            print(f"✅ Using Tesseract from env: {path}")
+            return True
+    
+    # Method 2: Auto-detect using which/shutil
+    detected = shutil.which('tesseract')
+    if detected:
+        pytesseract.pytesseract.tesseract_cmd = detected
+        print(f"✅ Tesseract auto-detected at: {detected}")
+        return True
+    
+    # Method 3: Try common Linux paths
+    linux_paths = [
+        '/usr/bin/tesseract',
+        '/usr/local/bin/tesseract',
+        '/app/.apt/usr/bin/tesseract',
+    ]
+    for path in linux_paths:
+        if os.path.exists(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            print(f"✅ Tesseract found at: {path}")
+            return True
+    
+    # Method 4: Windows (local development)
+    windows_paths = [
+        r'C:\Program Files\Tesseract-OCR\tesseract.exe',
+        r'C:\Program Files (x86)\Tesseract-OCR\tesseract.exe',
+    ]
+    for path in windows_paths:
+        if os.path.exists(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            print(f"✅ Tesseract found at: {path}")
+            return True
+    
+    print("❌ Tesseract not found!")
+    return False
+
+# Initialize Tesseract
+tesseract_available = setup_tesseract()
+
+
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint to verify server is running"""
@@ -405,5 +452,6 @@ if __name__ == '__main__':
     
 
     app.run(debug=True, port=5000, host='127.0.0.1')
+
 
 
