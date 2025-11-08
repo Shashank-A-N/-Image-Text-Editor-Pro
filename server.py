@@ -9,6 +9,12 @@ from io import BytesIO
 from werkzeug.utils import secure_filename
 import traceback
 
+# At the top, after imports
+tesseract_path = os.environ.get('TESSERACT_PATH')
+if tesseract_path:
+    pytesseract.pytesseract.tesseract_cmd = tesseract_path
+    print(f"Using Tesseract from env: {tesseract_path}")
+
 app = Flask(__name__)
 CORS(app)
 
@@ -399,4 +405,5 @@ if __name__ == '__main__':
     
 
     app.run(debug=True, port=5000, host='127.0.0.1')
+
 
