@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: image-text-editor
+    env: python
+    region: oregon
+    plan: free
+    branch: main
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    startCommand: "gunicorn server:app"
